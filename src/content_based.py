@@ -61,9 +61,13 @@ class ContentBasedRecommender:
         if use_tags and self.tags is not None:
             print("  ✓ Including user tags")
             
-            # Aggregate tags for each movie
-            movie_tags = self.tags.groupby('movieId')['tag'].apply(
-                lambda x: ' '.join(x.astype(str).str.lower())
+            # Aggregate tags for each movie - FIXED: Handle NaN values
+            # Remove NaN values and convert to string properly
+            movie_tags = self.tags.dropna(subset=['tag']).copy()  # Drop NaN tags
+            movie_tags['tag'] = movie_tags['tag'].astype(str).str.lower()  # Convert to string
+            
+            movie_tags = movie_tags.groupby('movieId')['tag'].apply(
+                lambda x: ' '.join(x)  # Now all values are strings
             ).reset_index()
             
             # Merge with movies
@@ -372,6 +376,11 @@ if __name__ == "__main__":
     loader = MovieLensLoader(data_path='dataset')
     
     if loader.load_data(verbose=False):
+        # Sample if large
+        if len(loader.ratings) > 1_000_000:
+            print("Large dataset detected. Sampling...")
+            loader.sample_data(n_users=1000, n_movies=3000)
+        
         # Create recommender
         recommender = ContentBasedRecommender(
             loader.movies,

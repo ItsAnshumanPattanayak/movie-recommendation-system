@@ -332,6 +332,59 @@ class MovieLensLoader:
         
         return top_rated[['movieId', 'title', 'genres', 'num_ratings', 'avg_rating']]
     
+    def sample_data(self, n_users=1000, n_movies=5000, min_ratings_per_user=20):
+        """
+        Sample the dataset to a smaller size for testing
+        
+        Args:
+            n_users: Number of users to keep
+            n_movies: Number of movies to keep
+            min_ratings_per_user: Minimum ratings per user
+            
+        Returns:
+            bool: True if successful
+        """
+        if self.ratings is None or self.movies is None:
+            print("✗ No data loaded to sample from")
+            return False
+        
+        print(f"\n{'='*60}")
+        print("SAMPLING DATASET")
+        print(f"{'='*60}")
+        print(f"Original size: {len(self.ratings):,} ratings")
+        
+        # Get most active users
+        user_counts = self.ratings['userId'].value_counts()
+        active_users = user_counts[user_counts >= min_ratings_per_user].head(n_users).index
+        
+        # Get most rated movies
+        movie_counts = self.ratings['movieId'].value_counts().head(n_movies).index
+        
+        # Filter ratings
+        self.ratings = self.ratings[
+            (self.ratings['userId'].isin(active_users)) &
+            (self.ratings['movieId'].isin(movie_counts))
+        ].copy()
+        
+        # Filter movies
+        self.movies = self.movies[
+            self.movies['movieId'].isin(self.ratings['movieId'].unique())
+        ].copy()
+        
+        # Filter tags if available
+        if self.tags is not None:
+            self.tags = self.tags[
+                (self.tags['userId'].isin(self.ratings['userId'].unique())) &
+                (self.tags['movieId'].isin(self.ratings['movieId'].unique()))
+            ].copy()
+        
+        print(f"Sampled size: {len(self.ratings):,} ratings")
+        print(f"Users: {self.ratings['userId'].nunique():,}")
+        print(f"Movies: {len(self.movies):,}")
+        print(f"{'='*60}\n")
+        
+        return True
+
     def save_processed_data(self, filepath='processed_data.pkl'):
         """
         Save processed data to pickle file

@@ -35,44 +35,83 @@ class CollaborativeFiltering:
         self.item_similarity = None
         
         self.user_mean_ratings = None
+        self.is_sparse = False
         
         print("✓ Collaborative Filtering initialized")
     
-    def create_user_item_matrix(self, normalize=False):
+    def create_user_item_matrix(self, normalize=False, use_sparse=True):
         """
         Create user-item rating matrix
         
         Args:
             normalize (bool): Normalize by user mean
+            use_sparse (bool): Use sparse matrix for large datasets
             
         Returns:
-            pd.DataFrame: User-item matrix
+            pd.DataFrame or sparse matrix: User-item matrix
         """
         print("\nCreating user-item matrix...")
         
-        # Create pivot table
-        self.user_item_matrix = self.ratings.pivot_table(
-            index='userId',
-            columns='movieId',
-            values='rating',
-            fill_value=0
-        )
+        n_users = self.ratings['userId'].nunique()
+        n_movies = self.ratings['movieId'].nunique()
+        n_ratings = len(self.ratings)
         
-        if normalize:
-            # Calculate user mean ratings (only for rated items)
-            user_ratings = self.ratings.groupby('userId')['rating'].mean()
-            self.user_mean_ratings = user_ratings
+        print(f"  Users: {n_users:,}, Movies: {n_movies:,}, Ratings: {n_ratings:,}")
+        
+        # Check if dataset is too large for dense matrix
+        matrix_size = n_users * n_movies * 8 / (1024**3)  # Size in GB
+        
+        if matrix_size > 4 and use_sparse:  # If larger than 4GB, use sparse
+            print(f"  ⚠ Large dataset detected ({matrix_size:.2f} GB)")
+            print(f"  ✓ Using sparse matrix representation")
             
-            # Normalize by subtracting user mean
-            for user_id in self.user_item_matrix.index:
-                user_mean = user_ratings.get(user_id, 0)
-                self.user_item_matrix.loc[user_id] = \
-                    self.user_item_matrix.loc[user_id].apply(
-                        lambda x: x - user_mean if x > 0 else 0
-                    )
-        
-        print(f"  ✓ Matrix shape: {self.user_item_matrix.shape}")
-        print(f"  ✓ Sparsity: {(self.user_item_matrix == 0).sum().sum() / self.user_item_matrix.size:.2%}")
+            self.is_sparse = True
+            
+            # Create sparse matrix
+            user_ids = self.ratings['userId'].astype('category')
+            movie_ids = self.ratings['movieId'].astype('category')
+            
+            rows = user_ids.cat.codes
+            cols = movie_ids.cat.codes
+            
+            sparse_matrix = csr_matrix(
+                (self.ratings['rating'].values, (rows, cols)),
+                shape=(len(user_ids.cat.categories), len(movie_ids.cat.categories))
+            )
+            
+            self.user_item_matrix = sparse_matrix
+            self.user_id_map = dict(enumerate(user_ids.cat.categories))
+            self.movie_id_map = dict(enumerate(movie_ids.cat.categories))
+            
+            print(f"  ✓ Sparse matrix created: {sparse_matrix.shape}")
+            print(f"  ✓ Sparsity: {1 - sparse_matrix.nnz / (sparse_matrix.shape[0] * sparse_matrix.shape[1]):.2%}")
+            
+        else:
+            # Use pandas pivot table for smaller datasets
+            self.is_sparse = False
+            
+            self.user_item_matrix = self.ratings.pivot_table(
+                index='userId',
+                columns='movieId',
+                values='rating',
+                fill_value=0
+            )
+            
+            if normalize:
+                # Calculate user mean ratings (only for rated items)
+                user_ratings = self.ratings.groupby('userId')['rating'].mean()
+                self.user_mean_ratings = user_ratings
+                
+                # Normalize by subtracting user mean
+                for user_id in self.user_item_matrix.index:
+                    user_mean = user_ratings.get(user_id, 0)
+                    self.user_item_matrix.loc[user_id] = \
+                        self.user_item_matrix.loc[user_id].apply(
+                            lambda x: x - user_mean if x > 0 else 0
+                        )
+            
+            print(f"  ✓ Matrix shape: {self.user_item_matrix.shape}")
+            print(f"  ✓ Sparsity: {(self.user_item_matrix == 0).sum().sum() / self.user_item_matrix.size:.2%}")
         
         return self.user_item_matrix
     
@@ -89,6 +128,11 @@ class CollaborativeFiltering:
         """
         if self.user_item_matrix is None:
             self.create_user_item_matrix()
+        
+        if self.is_sparse:
+            print("\n⚠️  Sparse matrix detected. User-user similarity may take time.")
+            print("   Consider using item-item filtering instead.")
+            return None
         
         print(f"\nComputing user-user similarity ({metric})...")
         
@@ -127,6 +171,11 @@ class CollaborativeFiltering:
         """
         if self.user_item_matrix is None:
             self.create_user_item_matrix()
+        
+        if self.is_sparse:
+            print("\n⚠️  Sparse matrix detected. Item-item similarity may take time.")
+            print("   Consider using matrix factorization instead.")
+            return None
         
         print(f"\nComputing item-item similarity ({metric})...")
         
@@ -168,6 +217,10 @@ class CollaborativeFiltering:
         """
         if self.user_similarity is None:
             self.compute_user_similarity()
+        
+        if self.user_similarity is None:
+            print("✗ Cannot compute user similarity. Use smaller dataset or different method.")
+            return None
         
         # Check if user exists
         if user_id not in self.user_similarity.index:
@@ -248,6 +301,10 @@ class CollaborativeFiltering:
         """
         if self.item_similarity is None:
             self.compute_item_similarity()
+        
+        if self.item_similarity is None:
+            print("✗ Cannot compute item similarity. Use smaller dataset or different method.")
+            return None
         
         # Get user's rated movies
         user_ratings = self.ratings[self.ratings['userId'] == user_id][
@@ -337,6 +394,9 @@ class CollaborativeFiltering:
             if self.user_similarity is None:
                 self.compute_user_similarity()
             
+            if self.user_similarity is None:
+                return self.ratings['rating'].mean()
+            
             # Get similar users who rated this movie
             movie_raters = self.ratings[
                 self.ratings['movieId'] == movie_id
@@ -370,6 +430,9 @@ class CollaborativeFiltering:
         else:  # item-based
             if self.item_similarity is None:
                 self.compute_item_similarity()
+            
+            if self.item_similarity is None:
+                return self.ratings['rating'].mean()
             
             # Get user's rated movies
             user_ratings = self.ratings[self.ratings['userId'] == user_id]
@@ -414,7 +477,7 @@ class CollaborativeFiltering:
         if self.user_similarity is None:
             self.compute_user_similarity()
         
-        if user_id not in self.user_similarity.index:
+        if self.user_similarity is None or user_id not in self.user_similarity.index:
             print(f"✗ User {user_id} not found")
             return None
         
@@ -448,6 +511,11 @@ if __name__ == "__main__":
     loader = MovieLensLoader(data_path='dataset')
     
     if loader.load_data(verbose=False):
+        # Sample if large
+        if len(loader.ratings) > 1_000_000:
+            print("Large dataset detected. Sampling...")
+            loader.sample_data(n_users=1000, n_movies=3000)
+        
         # Create recommender
         cf = CollaborativeFiltering(loader.ratings, loader.movies)
         
