@@ -145,15 +145,18 @@ class CollaborativeFiltering:
         else:
             raise ValueError(f"Unknown metric: {metric}")
         
+        # FIXED: Make a writable copy of the similarity matrix
+        similarity = similarity.copy()
+        
+        # Set diagonal to 0 (user with themselves)
+        np.fill_diagonal(similarity, 0)
+        
         # Convert to DataFrame
         self.user_similarity = pd.DataFrame(
             similarity,
             index=self.user_item_matrix.index,
             columns=self.user_item_matrix.index
         )
-        
-        # Set diagonal to 0 (user with themselves)
-        np.fill_diagonal(self.user_similarity.values, 0)
         
         print(f"  ✓ Similarity matrix shape: {self.user_similarity.shape}")
         
@@ -189,15 +192,18 @@ class CollaborativeFiltering:
         else:
             raise ValueError(f"Unknown metric: {metric}")
         
+        # FIXED: Make a writable copy
+        similarity = similarity.copy()
+        
+        # Set diagonal to 0
+        np.fill_diagonal(similarity, 0)
+        
         # Convert to DataFrame
         self.item_similarity = pd.DataFrame(
             similarity,
             index=self.user_item_matrix.columns,
             columns=self.user_item_matrix.columns
         )
-        
-        # Set diagonal to 0
-        np.fill_diagonal(self.item_similarity.values, 0)
         
         print(f"  ✓ Similarity matrix shape: {self.item_similarity.shape}")
         
