@@ -1,4 +1,4 @@
-# src/content_based.py
+# src/content_based.py - COMPLETE CORRECTED VERSION
 
 import pandas as pd
 import numpy as np
@@ -42,7 +42,7 @@ class ContentBasedRecommender:
     
     def create_movie_features(self, use_tags=True, max_features=100):
         """
-        Create feature vectors for movies - MAXIMUM NaN PROTECTION
+        Create feature vectors for movies - FIXED VERSION
         
         Args:
             use_tags (bool): Include user tags in features
@@ -53,108 +53,98 @@ class ContentBasedRecommender:
         """
         print("\nCreating movie features...")
         
-        # Make a fresh copy to avoid modifying original
-        movies_work = self.movies.copy()
+        # STEP 1: Process genres first (we know this works from debug)
+        self.movies['genres'] = self.movies['genres'].fillna('Unknown')
+        self.movies['genres_clean'] = self.movies['genres'].str.replace('|', ' ', regex=False)
+        self.movies['genres_clean'] = self.movies['genres_clean'].str.replace('-', ' ', regex=False)
         
-        # STEP 1: Handle genres - ensure no NaN
-        movies_work['genres'] = movies_work['genres'].fillna('Unknown')
-        movies_work['genres'] = movies_work['genres'].astype(str)
-        movies_work['genres_clean'] = movies_work['genres'].str.replace('|', ' ', regex=False)
-        movies_work['genres_clean'] = movies_work['genres_clean'].str.replace('-', ' ', regex=False)
+        # Start with genres as features
+        self.movies['features'] = self.movies['genres_clean']
         
-        # STEP 2: Start with genres as base features
-        movies_work['features'] = movies_work['genres_clean']
-        
-        # STEP 3: Add tags if requested and available
+        # STEP 2: Process and merge tags if requested
         if use_tags and self.tags is not None:
             print("  ✓ Including user tags")
             
             try:
-                # Clean tags dataframe
-                tags_work = self.tags.copy()
+                # Clean tags - remove NaN rows
+                tags_clean = self.tags.dropna(subset=['tag']).copy()
                 
-                # Remove rows with NaN tags
-                tags_work = tags_work.dropna(subset=['tag'])
+                # Convert tags to lowercase strings
+                tags_clean['tag'] = tags_clean['tag'].astype(str).str.lower().str.strip()
                 
-                # Convert to string and clean
-                tags_work['tag'] = tags_work['tag'].astype(str)
-                tags_work['tag'] = tags_work['tag'].str.lower().str.strip()
+                # Remove invalid tag values
+                tags_clean = tags_clean[~tags_clean['tag'].isin(['nan', 'none', '', 'null'])]
                 
-                # Remove 'nan', 'none', empty strings, and other invalid values
-                invalid_values = ['nan', 'none', '', 'null', 'n/a', 'na']
-                tags_work = tags_work[~tags_work['tag'].isin(invalid_values)]
-                
-                if len(tags_work) > 0:
+                if len(tags_clean) > 0:
                     # Aggregate tags per movie
-                    movie_tags = tags_work.groupby('movieId')['tag'].apply(
+                    movie_tags = tags_clean.groupby('movieId')['tag'].apply(
                         lambda x: ' '.join(x.tolist())
                     ).reset_index()
                     movie_tags.columns = ['movieId', 'tag_text']
                     
-                    # Merge with movies
-                    movies_work = movies_work.merge(movie_tags, on='movieId', how='left')
-                    movies_work['tag_text'] = movies_work['tag_text'].fillna('')
+                    # THE FIX: Merge tags and handle the result properly
+                    # First, save original features
+                    original_features = self.movies[['movieId', 'features']].copy()
                     
-                    # Combine genres and tags
-                    movies_work['features'] = (
-                        movies_work['genres_clean'].astype(str) + ' ' + 
-                        movies_work['tag_text'].astype(str)
+                    # Merge with tags
+                    movies_with_tags = original_features.merge(
+                        movie_tags, 
+                        on='movieId', 
+                        how='left'
                     )
+                    
+                    # Fill NaN tag_text with empty string
+                    movies_with_tags['tag_text'] = movies_with_tags['tag_text'].fillna('')
+                    
+                    # Combine features and tags
+                    movies_with_tags['features'] = (
+                        movies_with_tags['features'].astype(str) + ' ' + 
+                        movies_with_tags['tag_text'].astype(str)
+                    )
+                    
+                    # Update only the features column in self.movies
+                    self.movies['features'] = movies_with_tags['features'].values
+                    
                     print(f"  ✓ Added tags for {len(movie_tags)} movies")
                 else:
                     print("  ⚠ No valid tags found, using genres only")
                     
             except Exception as e:
-                print(f"  ⚠ Error with tags ({e}), using genres only")
-                movies_work['features'] = movies_work['genres_clean']
+                print(f"  ⚠ Error processing tags: {e}")
+                print("  ✓ Using genres only")
+                # Features are already set to genres_clean
         
-        # STEP 4: Final cleaning of features column
-        movies_work['features'] = movies_work['features'].astype(str)
-        movies_work['features'] = movies_work['features'].fillna('unknown')
-        movies_work['features'] = movies_work['features'].str.strip()
+        # STEP 3: Final cleanup - ensure no NaN in features
+        # Convert to string
+        self.movies['features'] = self.movies['features'].astype(str)
         
-        # Replace empty or invalid values
-        movies_work.loc[movies_work['features'] == '', 'features'] = 'unknown'
-        movies_work.loc[movies_work['features'] == 'nan', 'features'] = 'unknown'
-        movies_work.loc[movies_work['features'] == 'None', 'features'] = 'unknown'
-        movies_work.loc[movies_work['features'].str.lower() == 'none', 'features'] = 'unknown'
+        # Fill any NaN
+        self.movies['features'] = self.movies['features'].fillna('unknown')
         
-        # Update the main movies dataframe
-        self.movies = movies_work
+        # Strip whitespace
+        self.movies['features'] = self.movies['features'].str.strip()
         
-        # STEP 5: Verify no NaN before TF-IDF
-        nan_count = self.movies['features'].isna().sum()
-        if nan_count > 0:
-            print(f"  ⚠ Found {nan_count} NaN values, replacing...")
+        # Replace empty or 'nan' strings
+        self.movies.loc[self.movies['features'].isin(['', 'nan', 'None', 'none']), 'features'] = 'unknown'
+        
+        # STEP 4: Verify before TF-IDF
+        if self.movies['features'].isna().any():
+            print("  ⚠ Warning: NaN detected, fixing...")
             self.movies['features'] = self.movies['features'].fillna('unknown')
         
-        # Convert to list to ensure no pandas issues
-        features_list = self.movies['features'].tolist()
-        
-        # Double-check for any None values in the list
-        features_list = [str(f) if f is not None else 'unknown' for f in features_list]
-        
-        # Replace back
-        self.movies['features'] = features_list
-        
-        # Final verification
-        assert self.movies['features'].dtype == 'object', "Features must be string type"
-        assert self.movies['features'].isna().sum() == 0, "Features contains NaN values"
-        assert None not in self.movies['features'].values, "Features contains None values"
-        
-        # STEP 6: Create TF-IDF vectors
+        # STEP 5: Create TF-IDF vectors
         print("  ✓ Creating TF-IDF vectors...")
+        
         self.tfidf = TfidfVectorizer(
             stop_words='english',
             max_features=max_features,
             ngram_range=(1, 2),
             min_df=1,
-            lowercase=True,
-            strip_accents='unicode'
+            lowercase=True
         )
         
-        # Use the cleaned features list
-        self.movie_features = self.tfidf.fit_transform(self.movies['features'])
+        # Use .values to get a clean array
+        self.movie_features = self.tfidf.fit_transform(self.movies['features'].values)
         self.feature_names = self.tfidf.get_feature_names_out()
         
         print(f"  ✓ Feature matrix shape: {self.movie_features.shape}")
