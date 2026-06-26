@@ -1,4 +1,4 @@
-# 🎬 Movie Recommendation System
+# 🎬 Movie Recommendation System 
 
 A comprehensive movie recommendation system implementing multiple state-of-the-art algorithms.
 
